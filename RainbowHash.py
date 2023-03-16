@@ -8,6 +8,9 @@ import argparse
 import sys
 import binascii
 
+from threading import Lock
+from concurrent.futures import ThreadPoolExecutor, wait, as_completed
+
 # used argparse module for creating help menu
 parser = argparse.ArgumentParser(description="RainbowHash is Great Tool for recover Hashe.It Supports Hash such as md5, sha1, sha256, sha512, and many more. It is alsocapable of genrate Rainbow Table with Wordlist file as input.")
 parser.add_argument('-f', '--file', help = 'File To Create Rainbow Table', nargs = 1)
@@ -29,7 +32,7 @@ else:
     os.chdir('.rainbow_Database/')
 
 # used sqlite3 module for creating database of Hashes
-sql = sqlite3.connect('Database.db')
+sql = sqlite3.connect('Database.db', check_same_thread=False)
 sql.execute('create table if not exists Hashes_Table(name text, md5 hash, sha1 hash, sha224 hash, blake2s hash, blake2b hash, sha3_384 hash, sha384 hash, sha3_512 hash, sha3_224 hash, sha512 hash, sha256 hash, sha3_256 hash, ntlm hash)')
 sql.commit()
 
@@ -97,55 +100,56 @@ def check_me(ck_word):
     else : return False
 
 
-def add_data(word_file, salt_value=None, post_value=None, rep = 0):
-    n = 0
-    # it will create rainbow table with given file
-    fp = open(word_file, 'r', encoding="Latin-1")
-    for word in fp:
-        try:
-            n += 1
-            word = word.strip(string.whitespace)
-            if salt_value is not None:
-                word = salt_value + word # Prepend the salt value
-            if post_value is not None:
-                word += post_value # append the salt value
-            if arg.verbose:
-                print(word)
+def add_data(wordlist, file_lock, db_lock, salt_value=None, post_value=None, rep = 0):
+    
+    file_lock.acquire()
+    word = wordlist.readline()[:-1]
+    file_lock.release()
 
-            if rep == 1:
-                chk = check_me(word)
-            
-            if rep == 0 : 
-                chk = False
-            
-            if chk is False:
-                # this function will create hashes
-                md5 = hashlib.md5(word.encode()).hexdigest()
-                sha1 = hashlib.sha1(word.encode()).hexdigest()
-                sha224 = hashlib.sha224(word.encode()).hexdigest()
-                blake2s = hashlib.blake2s(word.encode()).hexdigest()
-                blake2b = hashlib.blake2b(word.encode()).hexdigest()
-                sha3_384 = hashlib.sha3_384(word.encode()).hexdigest()
-                sha384 = hashlib.sha384(word.encode()).hexdigest()
-                sha3_512 = hashlib.sha3_512(word.encode()).hexdigest()
-                sha3_224 = hashlib.sha3_224(word.encode()).hexdigest()
-                sha512 = hashlib.sha512(word.encode()).hexdigest()
-                sha256 = hashlib.sha256(word.encode()).hexdigest()
-                sha3_256 = hashlib.sha3_224(word.encode()).hexdigest()
-                ntlm = (binascii.hexlify(hashlib.new('md4', word.encode('utf-16le')).digest())).decode()
+    try:
+        word = word.strip(string.whitespace)
+        if salt_value is not None:
+            word = salt_value + word # Prepend the salt value
+        if post_value is not None:
+            word += post_value # append the salt value
+        if arg.verbose:
+            print(word)
 
-                sql.execute('insert into Hashes_Table(name, md5 , sha1, sha224 , blake2s , blake2b , sha3_384 , sha384 , sha3_512, '
-                            'sha3_224, sha512, sha256, sha3_256, ntlm ) values(?,?,?,?,?,?,?,?,?,?,?,?,?,?)', (word, md5, sha1,
-                                                                                                      sha224, blake2s,
-                                                                                                      blake2b, sha3_384,
-                                                                                                      sha384, sha3_512,
-                                                                                                      sha3_224, sha512,
-                                                                                                      sha256, sha3_256, ntlm))
+        if rep == 1:
+            chk = check_me(word)
+        
+        if rep == 0 : 
+            chk = False
+        
+        if chk is False:
+            # this function will create hashes
+            md5 = hashlib.md5(word.encode()).hexdigest()
+            sha1 = hashlib.sha1(word.encode()).hexdigest()
+            sha224 = hashlib.sha224(word.encode()).hexdigest()
+            blake2s = hashlib.blake2s(word.encode()).hexdigest()
+            blake2b = hashlib.blake2b(word.encode()).hexdigest()
+            sha3_384 = hashlib.sha3_384(word.encode()).hexdigest()
+            sha384 = hashlib.sha384(word.encode()).hexdigest()
+            sha3_512 = hashlib.sha3_512(word.encode()).hexdigest()
+            sha3_224 = hashlib.sha3_224(word.encode()).hexdigest()
+            sha512 = hashlib.sha512(word.encode()).hexdigest()
+            sha256 = hashlib.sha256(word.encode()).hexdigest()
+            sha3_256 = hashlib.sha3_224(word.encode()).hexdigest()
+            ntlm = (binascii.hexlify(hashlib.new('md4', word.encode('utf-16le')).digest())).decode()
 
-        except Exception:  
-            print(Exception)
-    sql.commit()
-    print('WORD: ', n)  
+            db_lock.acquire()
+            sql.execute('insert into Hashes_Table(name, md5 , sha1, sha224 , blake2s , blake2b , sha3_384 , sha384 , sha3_512, '
+                        'sha3_224, sha512, sha256, sha3_256, ntlm ) values(?,?,?,?,?,?,?,?,?,?,?,?,?,?)', (word, md5, sha1,
+                                                                                                    sha224, blake2s,
+                                                                                                    blake2b, sha3_384,
+                                                                                                    sha384, sha3_512,
+                                                                                                    sha3_224, sha512,
+                                                                                                    sha256, sha3_256, ntlm))
+            sql.commit()
+            db_lock.release()
+
+    except Exception as err:  
+        print(err)
 
 
 # stored user arguments to variable
@@ -157,14 +161,29 @@ if arg.file is not None:
         chk = 1
 
     if os.path.isfile(file_name):
-        if arg.pre is not None:
-            salt = ''.join(arg.pre)
-            add_data(file_name, salt_value = salt, rep = chk)
-        elif arg.app is not None:
-            post = ''.join(arg.ap)
-            add_data(file_name, post_value = post, rep = chk)
-        else:
-            add_data(file_name, rep = chk)
+
+        wordlist = open(file_name, 'r', encoding="Latin-1")
+        length = len(wordlist.readlines())
+        wordlist.seek(0)
+
+        file_lock = Lock()
+        db_lock = Lock()
+
+        executor = ThreadPoolExecutor()
+
+        jobs = []
+        for k in range(length):
+            if arg.pre is not None:
+                salt = ''.join(arg.pre)
+                jobs.append(executor.submit(add_data, wordlist, file_lock, db_lock, salt_value = salt, rep = chk))
+            elif arg.app is not None:
+                post = ''.join(arg.ap)
+                jobs.append(executor.submit(add_data, wordlist, file_lock, db_lock, post_value = post, rep = chk))
+            else:
+                jobs.append(executor.submit(add_data, wordlist, file_lock, db_lock, rep = chk))
+
+        wait(jobs)
+
     else:
         print("file doesn't exist")
 
@@ -301,15 +320,29 @@ if len(sys.argv) < 2:
 
                         if os.path.isfile(file):
 
-                            if post is not None:
-                                add_data(file, post_value=post, rep = chk)
-                                continue
-                            if salt is not None:
-                                add_data(file, salt_value=salt, rep = chk)
-                                continue
-                            else:
-                                add_data(file, rep = chk)
-                                continue
+                            wordlist = open(file, 'r', encoding="Latin-1")
+                            length = len(wordlist.readlines())
+                            wordlist.seek(0)
+
+                            file_lock = Lock()
+                            db_lock = Lock()
+
+                            executor = ThreadPoolExecutor()
+
+                            jobs = []
+                            for k in range(length):
+                                if salt is not None:
+                                    salt = ''.join(arg.pre)
+                                    jobs.append(executor.submit(add_data, wordlist, file_lock, db_lock, salt_value = salt, rep = chk))
+                                elif post is not None:
+                                    post = ''.join(arg.ap)
+                                    jobs.append(executor.submit(add_data, wordlist, file_lock, db_lock, post_value = post, rep = chk))
+                                else:
+                                    jobs.append(executor.submit(add_data, wordlist, file_lock, db_lock, rep = chk))
+
+                            wait(jobs)
+
+                            continue
                         else:
                             print(file, 'is not file')
                             continue
